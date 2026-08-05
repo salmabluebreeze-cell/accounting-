@@ -1,0 +1,27 @@
+{
+  "name": "google-news-cli",
+  "version": "1.0.0",
+  "description": "A Command Line Interface to read latest Google News and headlines",
+  "main": "index.js",
+  "type": "module",
+  "bin": {
+    "google-news": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "cli",
+    "news",
+    "google-news",
+    "rss"
+  ],
+  "author": "Antigravity",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^12.1.0",
+    "picocolors": "^1.1.1",
+    "prompts": "^2.4.2",
+    "rss-parser": "^3.13.0"
+  }
+}

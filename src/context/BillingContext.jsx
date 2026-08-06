@@ -1,9 +1,8 @@
-iimport React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import { db } from '../firebase';
 import { 
   doc, 
   setDoc, 
-  deleteDoc, 
   onSnapshot 
 } from 'firebase/firestore';
 
@@ -115,43 +114,34 @@ export const BillingProvider = ({ children }) => {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [currentDoc, setCurrentDoc] = useState(null);
 
-  // 1. المزامنة اللحظية مع Firebase Firestore
+  // 1. الاستماع المباشر واللحظي للتغييرات من Firebase
   useEffect(() => {
-    // الاستماع لمعلومات الشركة
-    const unsubCompany = onSnapshot(
-      doc(db, 'app_data', 'companyInfo'), 
-      (docSnap) => {
-        if (docSnap.exists()) {
-          setCompanyInfoState(docSnap.data());
-        } else {
-          setDoc(doc(db, 'app_data', 'companyInfo'), INITIAL_COMPANY_INFO);
-        }
+    // الاستماع لبيانات الشركة
+    const unsubCompany = onSnapshot(doc(db, 'app_data', 'companyInfo'), (docSnap) => {
+      if (docSnap.exists()) {
+        setCompanyInfoState(docSnap.data());
+      } else {
+        setDoc(doc(db, 'app_data', 'companyInfo'), INITIAL_COMPANY_INFO);
       }
-    );
+    });
 
-    // الاستماع للعملاء
-    const unsubCustomers = onSnapshot(
-      doc(db, 'app_data', 'customers'), 
-      (docSnap) => {
-        if (docSnap.exists() && docSnap.data().list) {
-          setCustomers(docSnap.data().list);
-        } else {
-          setDoc(doc(db, 'app_data', 'customers'), { list: INITIAL_CUSTOMERS });
-        }
+    // الاستماع لقائمة العملاء
+    const unsubCustomers = onSnapshot(doc(db, 'app_data', 'customers'), (docSnap) => {
+      if (docSnap.exists() && docSnap.data().list) {
+        setCustomers(docSnap.data().list);
+      } else {
+        setDoc(doc(db, 'app_data', 'customers'), { list: INITIAL_CUSTOMERS });
       }
-    );
+    });
 
-    // الاستماع للوثائق والفواتير
-    const unsubDocuments = onSnapshot(
-      doc(db, 'app_data', 'documents'), 
-      (docSnap) => {
-        if (docSnap.exists() && docSnap.data().list) {
-          setDocuments(docSnap.data().list);
-        } else {
-          setDoc(doc(db, 'app_data', 'documents'), { list: INITIAL_DOCUMENTS });
-        }
+    // الاستماع لقائمة الفواتير والوثائق
+    const unsubDocuments = onSnapshot(doc(db, 'app_data', 'documents'), (docSnap) => {
+      if (docSnap.exists() && docSnap.data().list) {
+        setDocuments(docSnap.data().list);
+      } else {
+        setDoc(doc(db, 'app_data', 'documents'), { list: INITIAL_DOCUMENTS });
       }
-    );
+    });
 
     return () => {
       unsubCompany();
@@ -160,13 +150,17 @@ export const BillingProvider = ({ children }) => {
     };
   }, []);
 
-  // 2. تحديث معلومات الشركة
+  // 2. تحديث بيانات الشركة
   const setCompanyInfo = async (newInfo) => {
     setCompanyInfoState(newInfo);
-    await setDoc(doc(db, 'app_data', 'companyInfo'), newInfo);
+    try {
+      await setDoc(doc(db, 'app_data', 'companyInfo'), newInfo);
+    } catch (err) {
+      console.error("خطأ في حفظ بيانات الشركة:", err);
+    }
   };
 
-  // 3. إنتاج رقم الوثيقة التلقائي
+  // 3. الترقيم التلقائي
   const generateDocNumber = (type) => {
     const year = new Date().getFullYear();
     const prefix =
@@ -192,38 +186,60 @@ export const BillingProvider = ({ children }) => {
     return `${prefix}-${year}-${nextNum}`;
   };
 
-  // 4. حفظ أو تعديل وثيقة/فاتورة في Firebase
+  // 4. حفظ وتحديث الفاتورة بالكامل (التفاصيل والبنود والمجموع)
   const saveDocument = async (docData) => {
-    const updatedDocs = documents.some((d) => d.id === docData.id)
-      ? documents.map((d) => (d.id === docData.id ? docData : d))
-      : [docData, ...documents];
+    setDocuments((prev) => {
+      const exists = prev.some((d) => d.id === docData.id);
+      const updatedList = exists
+        ? prev.map((d) => (d.id === docData.id ? docData : d))
+        : [docData, ...prev];
 
-    setDocuments(updatedDocs);
-    await setDoc(doc(doc(db, 'app_data', 'documents').firestore, 'app_data', 'documents'), { list: updatedDocs });
+      // إرسال القائمة الجديدة الكاملة إلى Firebase
+      setDoc(doc(db, 'app_data', 'documents'), { list: updatedList }).catch((err) =>
+        console.error("خطأ في حفظ الفاتورة في السحابة:", err)
+      );
+
+      return updatedList;
+    });
   };
 
-  // 5. حذف وثيقة من Firebase
+  // 5. حذف الفاتورة
   const deleteDocument = async (id) => {
-    const updatedDocs = documents.filter((d) => d.id !== id);
-    setDocuments(updatedDocs);
-    await setDoc(doc(db, 'app_data', 'documents'), { list: updatedDocs });
+    setDocuments((prev) => {
+      const updatedList = prev.filter((d) => d.id !== id);
+      setDoc(doc(db, 'app_data', 'documents'), { list: updatedList }).catch((err) =>
+        console.error("خطأ في حذف الفاتورة:", err)
+      );
+      return updatedList;
+    });
   };
 
-  // 6. حفظ أو تعديل عميل في Firebase
+  // 6. حفظ وتحديث الزبائن
   const saveCustomer = async (custData) => {
-    const updatedCustomers = customers.some((c) => c.id === custData.id)
-      ? customers.map((c) => (c.id === custData.id ? custData : c))
-      : [...customers, custData];
+    setCustomers((prev) => {
+      const exists = prev.some((c) => c.id === custData.id);
+      const updatedList = exists
+        ? prev.map((c) => (c.id === custData.id ? custData : c))
+        : [...prev, custData];
 
-    setCustomers(updatedCustomers);
-    await setDoc(doc(db, 'app_data', 'customers'), { list: updatedCustomers });
+      // إرسال قائمة العملاء كاملة للسحابة
+      setDoc(doc(db, 'app_data', 'customers'), { list: updatedList }).catch((err) =>
+        console.error("خطأ في حفظ الزبون في السحابة:", err)
+      );
+
+      return updatedList;
+    });
   };
 
-  // 7. حذف عميل من Firebase
+  // 7. حذف الزبون
   const deleteCustomer = async (id) => {
-    const updatedCustomers = customers.filter((c) => c.id !== id);
-    setCustomers(updatedCustomers);
-    await setDoc(doc(db, 'app_data', 'customers'), { list: updatedCustomers });
+    setCustomers((prev) => {
+      const updatedList = prev.filter((c) => c.id !== id);
+      setDoc(doc(db, 'app_data', 'customers'), { list: updatedList }).catch((err) =>
+        console.error("خطأ في حذف الزبون:", err)
+      );
+      return updatedList;
+    });
   };
 
   return (

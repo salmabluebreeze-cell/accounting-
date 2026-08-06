@@ -1,0 +1,5 @@
+node_modules
+builddocker build -t my-react-app .
+dist
+.git
+.env

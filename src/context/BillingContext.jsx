@@ -1,5 +1,12 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { realtimeSync } from '../utils/realtimeSync';
+iimport React, { createContext, useContext, useState, useEffect } from 'react';
+import { db } from '../firebase';
+import { 
+  doc, 
+  setDoc, 
+  deleteDoc, 
+  onSnapshot 
+} from 'firebase/firestore';
+
 const BillingContext = createContext();
 
 const INITIAL_COMPANY_INFO = {
@@ -42,7 +49,7 @@ const INITIAL_CUSTOMERS = [
 const INITIAL_DOCUMENTS = [
   {
     id: 'doc-pi-108',
-    type: 'proforma', // 'proforma', 'quotation', 'invoice'
+    type: 'proforma',
     number: 'PI-2026-0108',
     date: '2026-08-02',
     validUntil: '2026-08-16',
@@ -101,80 +108,65 @@ const INITIAL_DOCUMENTS = [
 ];
 
 export const BillingProvider = ({ children }) => {
-  const [companyInfo, setCompanyInfo] = useState(() => {
-    const saved = localStorage.getItem('blue_breeze_company');
-    return saved ? JSON.parse(saved) : INITIAL_COMPANY_INFO;
-  });
+  const [companyInfo, setCompanyInfoState] = useState(INITIAL_COMPANY_INFO);
+  const [customers, setCustomers] = useState(INITIAL_CUSTOMERS);
+  const [documents, setDocuments] = useState(INITIAL_DOCUMENTS);
 
-  const [customers, setCustomers] = useState(() => {
-    const saved = localStorage.getItem('blue_breeze_customers');
-    return saved ? JSON.parse(saved) : INITIAL_CUSTOMERS;
-  });
-
-  const [documents, setDocuments] = useState(() => {
-    const saved = localStorage.getItem('blue_breeze_documents');
-    return saved ? JSON.parse(saved) : INITIAL_DOCUMENTS;
-  });
-
-  const [roomId, setRoomId] = useState('BLUE-BREEZE-TEAM-ROOM');
-  const [peerCount, setPeerCount] = useState(1);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [currentDoc, setCurrentDoc] = useState(null);
 
-  // Save to local storage on change & broadcast real-time sync
+  // 1. المزامنة اللحظية مع Firebase Firestore
   useEffect(() => {
-    localStorage.setItem('blue_breeze_company', JSON.stringify(companyInfo));
-  }, [companyInfo]);
-
-  useEffect(() => {
-    localStorage.setItem('blue_breeze_customers', JSON.stringify(customers));
-  }, [customers]);
-
-  useEffect(() => {
-    localStorage.setItem('blue_breeze_documents', JSON.stringify(documents));
-
-    // Broadcast state update to peer tabs/users
-    realtimeSync.broadcastState({
-      companyInfo,
-      customers,
-      documents,
-    });
-  }, [documents, companyInfo, customers]);
-
-  // Window Storage Event Listener (Instant Cross-Tab / Cross-Window Sync)
-  useEffect(() => {
-    const handleStorageChange = (e) => {
-      if (e.key === 'blue_breeze_documents' && e.newValue) {
-        setDocuments(JSON.parse(e.newValue));
-      } else if (e.key === 'blue_breeze_customers' && e.newValue) {
-        setCustomers(JSON.parse(e.newValue));
-      } else if (e.key === 'blue_breeze_company' && e.newValue) {
-        setCompanyInfo(JSON.parse(e.newValue));
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, []);
-
-  // Connect Real-time P2P sync listener
-  useEffect(() => {
-    realtimeSync.connectRoom(
-      roomId,
-      (remoteState) => {
-        if (remoteState) {
-          if (remoteState.documents) setDocuments(remoteState.documents);
-          if (remoteState.customers) setCustomers(remoteState.customers);
-          if (remoteState.companyInfo) setCompanyInfo(remoteState.companyInfo);
+    // الاستماع لمعلومات الشركة
+    const unsubCompany = onSnapshot(
+      doc(db, 'app_data', 'companyInfo'), 
+      (docSnap) => {
+        if (docSnap.exists()) {
+          setCompanyInfoState(docSnap.data());
+        } else {
+          setDoc(doc(db, 'app_data', 'companyInfo'), INITIAL_COMPANY_INFO);
         }
-      },
-      (count) => setPeerCount(count)
+      }
     );
 
-    return () => realtimeSync.disconnect();
-  }, [roomId]);
+    // الاستماع للعملاء
+    const unsubCustomers = onSnapshot(
+      doc(db, 'app_data', 'customers'), 
+      (docSnap) => {
+        if (docSnap.exists() && docSnap.data().list) {
+          setCustomers(docSnap.data().list);
+        } else {
+          setDoc(doc(db, 'app_data', 'customers'), { list: INITIAL_CUSTOMERS });
+        }
+      }
+    );
 
-  // Auto-generate Document Number
+    // الاستماع للوثائق والفواتير
+    const unsubDocuments = onSnapshot(
+      doc(db, 'app_data', 'documents'), 
+      (docSnap) => {
+        if (docSnap.exists() && docSnap.data().list) {
+          setDocuments(docSnap.data().list);
+        } else {
+          setDoc(doc(db, 'app_data', 'documents'), { list: INITIAL_DOCUMENTS });
+        }
+      }
+    );
+
+    return () => {
+      unsubCompany();
+      unsubCustomers();
+      unsubDocuments();
+    };
+  }, []);
+
+  // 2. تحديث معلومات الشركة
+  const setCompanyInfo = async (newInfo) => {
+    setCompanyInfoState(newInfo);
+    await setDoc(doc(db, 'app_data', 'companyInfo'), newInfo);
+  };
+
+  // 3. إنتاج رقم الوثيقة التلقائي
   const generateDocNumber = (type) => {
     const year = new Date().getFullYear();
     const prefix =
@@ -200,37 +192,38 @@ export const BillingProvider = ({ children }) => {
     return `${prefix}-${year}-${nextNum}`;
   };
 
-  // Add or Update Document
-  const saveDocument = (docData) => {
-    setDocuments((prev) => {
-      const exists = prev.some((d) => d.id === docData.id);
-      if (exists) {
-        return prev.map((d) => (d.id === docData.id ? docData : d));
-      } else {
-        return [docData, ...prev];
-      }
-    });
+  // 4. حفظ أو تعديل وثيقة/فاتورة في Firebase
+  const saveDocument = async (docData) => {
+    const updatedDocs = documents.some((d) => d.id === docData.id)
+      ? documents.map((d) => (d.id === docData.id ? docData : d))
+      : [docData, ...documents];
+
+    setDocuments(updatedDocs);
+    await setDoc(doc(doc(db, 'app_data', 'documents').firestore, 'app_data', 'documents'), { list: updatedDocs });
   };
 
-  // Delete Document
-  const deleteDocument = (id) => {
-    setDocuments((prev) => prev.filter((d) => d.id !== id));
+  // 5. حذف وثيقة من Firebase
+  const deleteDocument = async (id) => {
+    const updatedDocs = documents.filter((d) => d.id !== id);
+    setDocuments(updatedDocs);
+    await setDoc(doc(db, 'app_data', 'documents'), { list: updatedDocs });
   };
 
-  // Add / Edit Customer
-  const saveCustomer = (custData) => {
-    setCustomers((prev) => {
-      const exists = prev.some((c) => c.id === custData.id);
-      if (exists) {
-        return prev.map((c) => (c.id === custData.id ? custData : c));
-      } else {
-        return [...prev, custData];
-      }
-    });
+  // 6. حفظ أو تعديل عميل في Firebase
+  const saveCustomer = async (custData) => {
+    const updatedCustomers = customers.some((c) => c.id === custData.id)
+      ? customers.map((c) => (c.id === custData.id ? custData : c))
+      : [...customers, custData];
+
+    setCustomers(updatedCustomers);
+    await setDoc(doc(db, 'app_data', 'customers'), { list: updatedCustomers });
   };
 
-  const deleteCustomer = (id) => {
-    setCustomers((prev) => prev.filter((c) => c.id !== id));
+  // 7. حذف عميل من Firebase
+  const deleteCustomer = async (id) => {
+    const updatedCustomers = customers.filter((c) => c.id !== id);
+    setCustomers(updatedCustomers);
+    await setDoc(doc(db, 'app_data', 'customers'), { list: updatedCustomers });
   };
 
   return (
@@ -249,9 +242,6 @@ export const BillingProvider = ({ children }) => {
         setActiveTab,
         currentDoc,
         setCurrentDoc,
-        roomId,
-        setRoomId,
-        peerCount,
       }}
     >
       {children}

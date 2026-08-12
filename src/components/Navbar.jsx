@@ -7,6 +7,7 @@ import {
   Settings,
   LayoutDashboard,
   Share2,
+  Printer,
 } from 'lucide-react';
 import SyncModal from './SyncModal';
 
@@ -81,6 +82,15 @@ export default function Navbar() {
 
           {/* Nav Tabs */}
           <nav className="nav-links">
+            <button
+              className={`nav-btn ${activeTab === 'cheque-writer' ? 'active' : ''}`}
+              onClick={() => setActiveTab('cheque-writer')}
+              style={{ fontWeight: 800, color: activeTab === 'cheque-writer' ? '#0284c7' : 'inherit' }}
+            >
+              <Printer size={18} />
+              <span>Cheque Writer (طابعة الشيكات)</span>
+            </button>
+
             <button
               className={`nav-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
               onClick={() => setActiveTab('dashboard')}

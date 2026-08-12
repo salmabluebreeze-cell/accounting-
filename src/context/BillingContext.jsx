@@ -111,7 +111,7 @@ export const BillingProvider = ({ children }) => {
   const [customers, setCustomers] = useState(INITIAL_CUSTOMERS);
   const [documents, setDocuments] = useState(INITIAL_DOCUMENTS);
 
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState('cheque-writer');
   const [currentDoc, setCurrentDoc] = useState(null);
 
   // 1. الاستماع المباشر واللحظي للتغييرات من Firebase

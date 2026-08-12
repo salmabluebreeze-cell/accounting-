@@ -7,6 +7,7 @@ import DocumentEditor from './components/DocumentEditor';
 import PDFTemplate from './components/PDFTemplate';
 import CustomerManager from './components/CustomerManager';
 import SettingsModal from './components/SettingsModal';
+import ChequeWriter from './components/ChequeWriter';
 
 function MainApp() {
   const { activeTab } = useBilling();
@@ -20,6 +21,7 @@ function MainApp() {
         {activeTab === 'editor' && <DocumentEditor />}
         {activeTab === 'preview' && <PDFTemplate />}
         {activeTab === 'customers' && <CustomerManager />}
+        {activeTab === 'cheque-writer' && <ChequeWriter />}
         {activeTab === 'settings' && <SettingsModal />}
       </main>
     </div>

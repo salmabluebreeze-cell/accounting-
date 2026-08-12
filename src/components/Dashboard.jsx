@@ -9,6 +9,7 @@ import {
   Download,
   Eye,
   FileSpreadsheet,
+  Printer,
 } from 'lucide-react';
 import { exportSummaryToExcel } from '../utils/excelHandler';
 
@@ -215,6 +216,15 @@ export default function Dashboard() {
           >
             <PlusCircle size={18} />
             <span>Create Tax Invoice</span>
+          </button>
+
+          <button
+            className="btn btn-primary"
+            style={{ flex: 1, minWidth: '200px', padding: '14px', background: 'linear-gradient(135deg, #0284c7, #1e3a8a)', color: '#ffffff' }}
+            onClick={() => setActiveTab('cheque-writer')}
+          >
+            <Printer size={18} />
+            <span>Cheque Writer (طباعة الشيكات)</span>
           </button>
         </div>
       </div>

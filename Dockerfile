@@ -5,7 +5,6 @@ COPY package*.json ./
 RUN npm install
 COPY . .
 
-# التمرير لمتغيرات البيئة أثناء البناء في Vite
 ARG VITE_FIREBASE_API_KEY
 ARG VITE_FIREBASE_PROJECT_ID
 ENV VITE_FIREBASE_API_KEY=$VITE_FIREBASE_API_KEY
@@ -15,6 +14,10 @@ RUN npm run build
 
 # Phase 2: Production stage using Nginx
 FROM nginx:alpine
+
+# 👇 هذا هو السطر الجديد الذي أضفناه
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 80

@@ -20,3 +20,7 @@ yarn-error.log*
 *.njsproj
 *.sln
 *.sw?
+/My React App-win32-x64
+/*.exe
+/dist
+/build

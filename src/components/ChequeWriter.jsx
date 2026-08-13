@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { db } from '../firebase';
+import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { useBilling } from '../context/BillingContext';
-import { tafqeetArabic, tafqeetEnglish } from '../utils/tafqeet';
+import { tafqeetArabic } from '../utils/tafqeet';
 import {
   DEFAULT_TEMPLATES,
   CROSSING_STAMP_OPTIONS,
@@ -16,147 +18,200 @@ import {
   RotateCcw,
   Layout,
   History,
-  CheckCircle2,
-  AlertCircle,
-  PlusCircle,
-  Lock,
-  ChevronDown,
   Layers,
-  Settings
+  CloudOff,
+  Cloud,
+  CheckCircle2,
+  Loader
 } from 'lucide-react';
+
+// ─── Firebase document paths ───────────────────────────────────────────────
+const FB_TEMPLATES   = doc(db, 'cheque_data', 'templates');
+const FB_CALIBRATION = doc(db, 'cheque_data', 'calibration');
+const FB_LOGS        = doc(db, 'cheque_data', 'logs');
 
 export default function ChequeWriter() {
   const { customers } = useBilling();
 
-  // Active View Mode: 'editor', 'designer', 'calibration', 'history'
+  // ─── Sync status indicator ───────────────────────────────────────────────
+  const [syncStatus, setSyncStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
+
+  // ─── Active sub-tab ──────────────────────────────────────────────────────
   const [activeSubTab, setActiveSubTab] = useState('editor');
 
-  // Templates state
-  const [templates, setTemplates] = useState(() => {
-    const saved = localStorage.getItem('cheque_templates');
-    return saved ? JSON.parse(saved) : DEFAULT_TEMPLATES;
-  });
+  // ─── Templates (Firebase-synced) ─────────────────────────────────────────
+  const [templates, setTemplates] = useState(DEFAULT_TEMPLATES);
   const [selectedTemplateId, setSelectedTemplateId] = useState(DEFAULT_TEMPLATES[0].id);
+  const [templatesLoaded, setTemplatesLoaded] = useState(false);
 
-  // Active Template
-  const activeTemplate = templates.find((t) => t.id === selectedTemplateId) || templates[0];
+  // ─── Calibration (Firebase-synced) ───────────────────────────────────────
+  const [calibration, setCalibration] = useState(DEFAULT_PRINTER_CALIBRATION);
+  const [calibrationLoaded, setCalibrationLoaded] = useState(false);
 
-  // Printer Calibration state
-  const [calibration, setCalibration] = useState(() => {
-    const saved = localStorage.getItem('cheque_printer_calibration');
-    return saved ? JSON.parse(saved) : DEFAULT_PRINTER_CALIBRATION;
-  });
+  // ─── Cheque Logs / History (Firebase-synced) ─────────────────────────────
+  const [chequeLogs, setChequeLogs] = useState([]);
+  const [logsLoaded, setLogsLoaded] = useState(false);
 
-  // Current Cheque Form State
+  // ─── Current Cheque Form ──────────────────────────────────────────────────
   const [chequeData, setChequeData] = useState({
-    date: new Date().toISOString().split('T')[0].split('-').reverse().join('/'), // DD/MM/YYYY
+    date: new Date().toISOString().split('T')[0].split('-').reverse().join('/'),
     payee: '',
-    amountFigures: '1450.500',
+    amountFigures: '',
     currency: 'JOD',
     amountWords: '',
-    amountWordsLine2: '',
     useManualWords: false,
-    crossingStampId: 'payee_only', // Default to 'يصرف للمستفيد الأول'
+    crossingStampId: 'payee_only',
     crossingStampText: 'يصرف للمستفيد الأول',
     customStampText: '',
-    chequeNumber: '000001',
+    chequeNumber: '',
     bankName: 'Arab Bank - البنك العربي',
     signNote: '',
     status: 'printed'
   });
 
-  // Cheque History / Logs state
-  const [chequeLogs, setChequeLogs] = useState(() => {
-    const saved = localStorage.getItem('cheque_logs_history');
-    return saved ? JSON.parse(saved) : [
-      {
-        id: 'log-1',
-        chequeNumber: '000001',
-        date: '12/08/2026',
-        payee: 'شركة النسيم الأزرق لتجارة أجهزة الطاقة المتجددة',
-        amountFigures: '1450.500',
-        currency: 'JOD',
-        amountWords: 'فقط ألف وأربعمائة وخمسون ديناراً أردنياً وخمسمائة فلس لا غير',
-        crossingStampText: 'يصرف للمستفيد الأول',
-        bankName: 'Arab Bank - البنك العربي',
-        status: 'printed'
-      }
-    ];
-  });
-
-  // Designer active field
   const [activeFieldId, setActiveFieldId] = useState('payee');
   const [showBgImage, setShowBgImage] = useState(true);
 
-  // Auto Tafqeet effect
+  // ─── FIREBASE LISTENERS (real-time sync) ─────────────────────────────────
+
+  // Templates
+  useEffect(() => {
+    const unsub = onSnapshot(FB_TEMPLATES, (snap) => {
+      if (snap.exists() && snap.data().list) {
+        setTemplates(snap.data().list);
+      } else {
+        // First run: seed Firebase with defaults
+        setDoc(FB_TEMPLATES, { list: DEFAULT_TEMPLATES });
+      }
+      setTemplatesLoaded(true);
+    }, (err) => {
+      console.error('Templates sync error:', err);
+      setTemplatesLoaded(true);
+    });
+    return () => unsub();
+  }, []);
+
+  // Calibration
+  useEffect(() => {
+    const unsub = onSnapshot(FB_CALIBRATION, (snap) => {
+      if (snap.exists() && snap.data().data) {
+        setCalibration(snap.data().data);
+      } else {
+        setDoc(FB_CALIBRATION, { data: DEFAULT_PRINTER_CALIBRATION });
+      }
+      setCalibrationLoaded(true);
+    }, (err) => {
+      console.error('Calibration sync error:', err);
+      setCalibrationLoaded(true);
+    });
+    return () => unsub();
+  }, []);
+
+  // Cheque Logs
+  useEffect(() => {
+    const unsub = onSnapshot(FB_LOGS, (snap) => {
+      if (snap.exists() && snap.data().list) {
+        setChequeLogs(snap.data().list);
+      } else {
+        setDoc(FB_LOGS, { list: [] });
+      }
+      setLogsLoaded(true);
+    }, (err) => {
+      console.error('Logs sync error:', err);
+      setLogsLoaded(true);
+    });
+    return () => unsub();
+  }, []);
+
+  // ─── FIREBASE WRITE HELPERS ───────────────────────────────────────────────
+
+  const saveTemplates = useCallback(async (newTemplates) => {
+    setSyncStatus('saving');
+    try {
+      await setDoc(FB_TEMPLATES, { list: newTemplates });
+      setSyncStatus('saved');
+      setTimeout(() => setSyncStatus('idle'), 2000);
+    } catch (e) {
+      console.error('Error saving templates:', e);
+      setSyncStatus('error');
+    }
+  }, []);
+
+  const saveCalibration = useCallback(async (newCal) => {
+    setSyncStatus('saving');
+    try {
+      await setDoc(FB_CALIBRATION, { data: newCal });
+      setSyncStatus('saved');
+      setTimeout(() => setSyncStatus('idle'), 2000);
+    } catch (e) {
+      console.error('Error saving calibration:', e);
+      setSyncStatus('error');
+    }
+  }, []);
+
+  const saveLogs = useCallback(async (newLogs) => {
+    setSyncStatus('saving');
+    try {
+      await setDoc(FB_LOGS, { list: newLogs });
+      setSyncStatus('saved');
+      setTimeout(() => setSyncStatus('idle'), 2000);
+    } catch (e) {
+      console.error('Error saving logs:', e);
+      setSyncStatus('error');
+    }
+  }, []);
+
+  // ─── Auto Tafqeet ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!chequeData.useManualWords) {
       const num = parseFloat(chequeData.amountFigures);
       if (!isNaN(num) && num > 0) {
-        const words = tafqeetArabic(num, chequeData.currency);
-        setChequeData((prev) => ({
-          ...prev,
-          amountWords: words
-        }));
+        setChequeData((prev) => ({ ...prev, amountWords: tafqeetArabic(num, prev.currency) }));
       } else {
         setChequeData((prev) => ({ ...prev, amountWords: '' }));
       }
     }
   }, [chequeData.amountFigures, chequeData.currency, chequeData.useManualWords]);
 
-  // Persist Templates & Calibration
-  useEffect(() => {
-    localStorage.setItem('cheque_templates', JSON.stringify(templates));
-  }, [templates]);
+  // ─── Active Template ──────────────────────────────────────────────────────
+  const activeTemplate = templates.find((t) => t.id === selectedTemplateId) || templates[0];
 
-  useEffect(() => {
-    localStorage.setItem('cheque_printer_calibration', JSON.stringify(calibration));
-  }, [calibration]);
+  // ─── Handlers ─────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    localStorage.setItem('cheque_logs_history', JSON.stringify(chequeLogs));
-  }, [chequeLogs]);
-
-  // Handle Template Property Updates
   const handleUpdateTemplate = (updatedTemplate) => {
-    setTemplates((prev) =>
-      prev.map((t) => (t.id === updatedTemplate.id ? updatedTemplate : t))
+    const newTemplates = templates.map((t) =>
+      t.id === updatedTemplate.id ? updatedTemplate : t
     );
+    setTemplates(newTemplates);
+    saveTemplates(newTemplates);
   };
 
-  // Handle Crossing Stamp Change
+  const handleCalibrationChange = (newCal) => {
+    setCalibration(newCal);
+    saveCalibration(newCal);
+  };
+
   const handleStampChange = (stampId) => {
     const found = CROSSING_STAMP_OPTIONS.find((opt) => opt.id === stampId);
     let stampText = found ? found.label : '';
     if (stampId === 'none') stampText = '';
     if (stampId === 'custom') stampText = chequeData.customStampText || 'ختم مخصص';
-
-    setChequeData((prev) => ({
-      ...prev,
-      crossingStampId: stampId,
-      crossingStampText: stampText
-    }));
+    setChequeData((prev) => ({ ...prev, crossingStampId: stampId, crossingStampText: stampText }));
   };
 
-  // Handle Print Action
   const handlePrint = () => {
-    // Add to history if new
     const newLog = {
       id: `log-${Date.now()}`,
       ...chequeData,
       bankName: activeTemplate.bankName || activeTemplate.name,
       printedAt: new Date().toISOString()
     };
-
-    setChequeLogs((prev) => [newLog, ...prev]);
-
-    // Trigger browser native print dialog
-    setTimeout(() => {
-      window.print();
-    }, 150);
+    const newLogs = [newLog, ...chequeLogs];
+    setChequeLogs(newLogs);
+    saveLogs(newLogs);
+    setTimeout(() => window.print(), 150);
   };
 
-  // Save to Registry without print
   const handleSaveToRegistry = () => {
     const newLog = {
       id: `log-${Date.now()}`,
@@ -164,10 +219,65 @@ export default function ChequeWriter() {
       bankName: activeTemplate.bankName || activeTemplate.name,
       status: 'saved'
     };
-    setChequeLogs((prev) => [newLog, ...prev]);
-    alert('Cheque record saved successfully to history.');
+    const newLogs = [newLog, ...chequeLogs];
+    setChequeLogs(newLogs);
+    saveLogs(newLogs);
   };
 
+  const handleDeleteLog = (id) => {
+    const newLogs = chequeLogs.filter((l) => l.id !== id);
+    setChequeLogs(newLogs);
+    saveLogs(newLogs);
+  };
+
+  const handleClearAllLogs = () => {
+    if (window.confirm('هل أنت متأكد من مسح جميع سجلات الشيكات؟\nAre you sure you want to clear all cheque registry logs?')) {
+      setChequeLogs([]);
+      saveLogs([]);
+    }
+  };
+
+  // ─── Sync status indicator UI ─────────────────────────────────────────────
+  const SyncIndicator = () => {
+    if (syncStatus === 'saving') return (
+      <div className="sync-indicator saving">
+        <Loader size={14} className="spin-icon" /> Syncing to Cloud...
+      </div>
+    );
+    if (syncStatus === 'saved') return (
+      <div className="sync-indicator saved">
+        <CheckCircle2 size={14} /> Synced ✓
+      </div>
+    );
+    if (syncStatus === 'error') return (
+      <div className="sync-indicator error">
+        <CloudOff size={14} /> Sync Error
+      </div>
+    );
+    return (
+      <div className="sync-indicator idle">
+        <Cloud size={14} /> Firebase Cloud ☁️
+      </div>
+    );
+  };
+
+  // ─── Loading state (waiting for Firebase first load) ─────────────────────
+  const isLoading = !templatesLoaded || !calibrationLoaded || !logsLoaded;
+
+  if (isLoading) {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        justifyContent: 'center', height: '60vh', gap: '16px', color: '#475569'
+      }}>
+        <Loader size={40} className="spin-icon" style={{ color: '#0284c7' }} />
+        <h3 style={{ fontWeight: 700 }}>جاري تحميل بيانات الشيكات من Firebase...</h3>
+        <p style={{ fontSize: '0.9rem' }}>Loading cheque data from cloud, please wait.</p>
+      </div>
+    );
+  }
+
+  // ─── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="cheque-writer-module">
       {/* Module Header Bar */}
@@ -178,15 +288,15 @@ export default function ChequeWriter() {
           </div>
           <div>
             <h1>محرر وطابعة الشيكات المحترفة (Universal Cheque Writer)</h1>
-            <p>طباعة الشيكات البنكية بدقة عالية على جميع أنواع الطابعات</p>
+            <p>طباعة الشيكات البنكية بدقة عالية على جميع أنواع الطابعات — البيانات محفوظة على Firebase ☁️</p>
           </div>
         </div>
 
-        {/* Action Controls */}
         <div className="module-top-actions">
+          <SyncIndicator />
           <button className="btn btn-secondary" onClick={handleSaveToRegistry}>
             <Save size={16} />
-            <span>Save Entry</span>
+            <span>Save to Registry</span>
           </button>
           <button className="btn btn-primary btn-lg" onClick={handlePrint}>
             <Printer size={18} />
@@ -210,7 +320,7 @@ export default function ChequeWriter() {
           onClick={() => setActiveSubTab('designer')}
         >
           <Layout size={16} />
-          <span>Layout Designer (مصمم القالب والخطوط)</span>
+          <span>Layout Designer (مصمم القالب)</span>
         </button>
 
         <button
@@ -230,12 +340,12 @@ export default function ChequeWriter() {
         </button>
       </div>
 
-      {/* Main Sub-Tab Content Views */}
+      {/* Main Sub-Tab Content */}
       <div className="subtab-content-area">
+
         {/* SUBTAB 1: CHEQUE EDITOR FORM */}
         {activeSubTab === 'editor' && (
           <div className="editor-tab-layout">
-            {/* Form Section */}
             <div className="card editor-card">
               <div className="card-header">
                 <h3>بيانات وتفاصيل الشيك (Cheque Details)</h3>
@@ -247,9 +357,7 @@ export default function ChequeWriter() {
                     className="form-control"
                   >
                     {templates.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                      </option>
+                      <option key={t.id} value={t.id}>{t.name}</option>
                     ))}
                   </select>
                 </div>
@@ -257,6 +365,7 @@ export default function ChequeWriter() {
 
               <div className="card-body">
                 <form onSubmit={(e) => e.preventDefault()} className="cheque-form">
+
                   {/* Row 1: Date & Cheque Number */}
                   <div className="grid-2-col">
                     <div className="form-group">
@@ -295,7 +404,7 @@ export default function ChequeWriter() {
                     </div>
                   </div>
 
-                  {/* Row 2: Crossing Stamp Dropdown (ختم التسطير) */}
+                  {/* Row 2: Crossing Stamp */}
                   <div className="form-group highlight-box">
                     <label className="form-label fw-bold color-primary">
                       ختم التسطير (Crossing Stamp):
@@ -331,29 +440,27 @@ export default function ChequeWriter() {
                     </div>
                   </div>
 
-                  {/* Row 3: Payee Name (ادفعوا بموجب هذا الشيك لأمر) */}
+                  {/* Row 3: Payee Name */}
                   <div className="form-group">
                     <label className="form-label">
-                      اسم المستفيد (Payee Name - ادفعوا بموجب هذا الشيك لأمر):
+                      اسم المستفيد (Payee — ادفعوا بموجب هذا الشيك لأمر):
                     </label>
-                    <div className="payee-input-wrapper">
-                      <input
-                        type="text"
-                        value={chequeData.payee}
-                        onChange={(e) => setChequeData({ ...chequeData, payee: e.target.value })}
-                        placeholder="اسم الشريكة / الشركة / الشخص..."
-                        className="form-control payee-input"
-                        list="customer-suggestions"
-                      />
-                      <datalist id="customer-suggestions">
-                        {customers.map((c) => (
-                          <option key={c.id} value={c.companyName} />
-                        ))}
-                      </datalist>
-                    </div>
+                    <input
+                      type="text"
+                      value={chequeData.payee}
+                      onChange={(e) => setChequeData({ ...chequeData, payee: e.target.value })}
+                      placeholder="اسم الشركة / الشخص..."
+                      className="form-control payee-input"
+                      list="customer-suggestions"
+                    />
+                    <datalist id="customer-suggestions">
+                      {customers.map((c) => (
+                        <option key={c.id} value={c.companyName} />
+                      ))}
+                    </datalist>
                   </div>
 
-                  {/* Row 4: Amount Figures & Currency */}
+                  {/* Row 4: Amount & Currency */}
                   <div className="grid-2-col">
                     <div className="form-group">
                       <label className="form-label">المبلغ بالأرقام (Amount in Figures):</label>
@@ -385,11 +492,11 @@ export default function ChequeWriter() {
                     </div>
                   </div>
 
-                  {/* Row 5: Amount in Words (Tafqeet) */}
+                  {/* Row 5: Tafqeet */}
                   <div className="form-group">
                     <div className="label-with-checkbox">
                       <label className="form-label">
-                        المبلغ بالحروف (Tafqeet - مبلغ وقدره):
+                        المبلغ بالحروف (مبلغ وقدره — Tafqeet):
                       </label>
                       <label className="checkbox-inline">
                         <input
@@ -399,7 +506,7 @@ export default function ChequeWriter() {
                             setChequeData({ ...chequeData, useManualWords: e.target.checked })
                           }
                         />
-                        <span>تعديل التفقيط يدوياً</span>
+                        <span>تعديل يدوي</span>
                       </label>
                     </div>
                     <textarea
@@ -411,14 +518,26 @@ export default function ChequeWriter() {
                       placeholder="التفقيط التلقائي يظهر هنا..."
                     />
                   </div>
+
+                  {/* Optional Note */}
+                  <div className="form-group">
+                    <label className="form-label">ملاحظة (Note / Sign area — اختياري):</label>
+                    <input
+                      type="text"
+                      value={chequeData.signNote}
+                      onChange={(e) => setChequeData({ ...chequeData, signNote: e.target.value })}
+                      placeholder="ملاحظة اختيارية..."
+                      className="form-control"
+                    />
+                  </div>
                 </form>
               </div>
             </div>
 
-            {/* Side Live Cheque Preview */}
+            {/* Live Preview */}
             <div className="card preview-card">
               <div className="card-header">
-                <h3>معاينة مباشرة للشيك (Live Preview)</h3>
+                <h3>معاينة مباشرة (Live Preview)</h3>
                 <span className="badge-info">{activeTemplate.name}</span>
               </div>
               <div className="card-body center-flex">
@@ -455,13 +574,12 @@ export default function ChequeWriter() {
         {activeSubTab === 'calibration' && (
           <div className="calibration-container card">
             <div className="card-header">
-              <h2>إعدادات وتعديل معايرة الطابعة (Universal Printer Calibration)</h2>
-              <p>تعديل الإزاحة بالأفقي والعمودي (ملم) لضمان الطباعة في المكان المخصص بالضبط على أي نوع طابعة</p>
+              <h2>إعدادات معايرة الطابعة (Universal Printer Calibration)</h2>
+              <p>تعديل الإزاحة بالأفقي والعمودي (ملم) — محفوظ على Firebase ويطبق على جميع الأجهزة</p>
             </div>
 
             <div className="card-body calibration-body">
               <div className="grid-2-col">
-                {/* Horizontal Offset Slider */}
                 <div className="calibration-control-box">
                   <label className="calibration-label">
                     الإزاحة الأفقية X-Offset (يمين / يسار):
@@ -474,18 +592,17 @@ export default function ChequeWriter() {
                     step="0.5"
                     value={calibration.offsetX}
                     onChange={(e) =>
-                      setCalibration({ ...calibration, offsetX: parseFloat(e.target.value) })
+                      handleCalibrationChange({ ...calibration, offsetX: parseFloat(e.target.value) })
                     }
                     className="range-slider"
                   />
                   <div className="range-hints">
-                    <span>-40 mm (إلى اليسار)</span>
+                    <span>-40 mm (يسار)</span>
                     <span>0 mm</span>
-                    <span>+40 mm (إلى اليمين)</span>
+                    <span>+40 mm (يمين)</span>
                   </div>
                 </div>
 
-                {/* Vertical Offset Slider */}
                 <div className="calibration-control-box">
                   <label className="calibration-label">
                     الإزاحة العمودية Y-Offset (أعلى / أسفل):
@@ -498,25 +615,24 @@ export default function ChequeWriter() {
                     step="0.5"
                     value={calibration.offsetY}
                     onChange={(e) =>
-                      setCalibration({ ...calibration, offsetY: parseFloat(e.target.value) })
+                      handleCalibrationChange({ ...calibration, offsetY: parseFloat(e.target.value) })
                     }
                     className="range-slider"
                   />
                   <div className="range-hints">
-                    <span>-40 mm (إلى الأعلى)</span>
+                    <span>-40 mm (أعلى)</span>
                     <span>0 mm</span>
-                    <span>+40 mm (إلى الأسفل)</span>
+                    <span>+40 mm (أسفل)</span>
                   </div>
                 </div>
               </div>
 
-              {/* Feed Orientation & Paper Tray Mode */}
               <div className="feed-orientation-section">
-                <h4>اتجاه تغذية الورق بالطابعة (Printer Paper Tray Orientation):</h4>
+                <h4>اتجاه تغذية الورق (Printer Paper Tray Orientation):</h4>
                 <div className="orientation-grid">
                   <div
                     className={`orientation-card ${calibration.feedOrientation === 'landscape' ? 'active' : ''}`}
-                    onClick={() => setCalibration({ ...calibration, feedOrientation: 'landscape' })}
+                    onClick={() => handleCalibrationChange({ ...calibration, feedOrientation: 'landscape' })}
                   >
                     <div className="icon-box">📄</div>
                     <div className="orient-title">Landscape (تغذية عرضية)</div>
@@ -525,10 +641,10 @@ export default function ChequeWriter() {
 
                   <div
                     className={`orientation-card ${calibration.feedOrientation === 'portrait_center' ? 'active' : ''}`}
-                    onClick={() => setCalibration({ ...calibration, feedOrientation: 'portrait_center' })}
+                    onClick={() => handleCalibrationChange({ ...calibration, feedOrientation: 'portrait_center' })}
                   >
                     <div className="icon-box">📩</div>
-                    <div className="orient-title">Portrait Center (تلقيم طولي بالمنتصف)</div>
+                    <div className="orient-title">Portrait Center (تلقيم طولي)</div>
                     <p>تلقيم الشيك في منتصف صينية ورق الطابعة</p>
                   </div>
                 </div>
@@ -537,13 +653,12 @@ export default function ChequeWriter() {
               <div className="calibration-footer">
                 <button
                   className="btn btn-secondary"
-                  onClick={() => setCalibration(DEFAULT_PRINTER_CALIBRATION)}
+                  onClick={() => handleCalibrationChange(DEFAULT_PRINTER_CALIBRATION)}
                 >
                   <RotateCcw size={16} /> Reset Default Calibration
                 </button>
-
                 <button className="btn btn-primary" onClick={handlePrint}>
-                  <Printer size={16} /> Test Calibration Print Page
+                  <Printer size={16} /> Test Calibration Print
                 </button>
               </div>
             </div>
@@ -558,12 +673,8 @@ export default function ChequeWriter() {
               setChequeData(item);
               setTimeout(() => window.print(), 100);
             }}
-            onDeleteLog={(id) => setChequeLogs((prev) => prev.filter((l) => l.id !== id))}
-            onClearAllLogs={() => {
-              if (confirm('Are you sure you want to clear all cheque registry logs?')) {
-                setChequeLogs([]);
-              }
-            }}
+            onDeleteLog={handleDeleteLog}
+            onClearAllLogs={handleClearAllLogs}
             onLoadChequeToEditor={(item) => {
               setChequeData(item);
               setActiveSubTab('editor');
@@ -572,7 +683,7 @@ export default function ChequeWriter() {
         )}
       </div>
 
-      {/* Hidden Print Container for CSS @media print */}
+      {/* Hidden Print Container */}
       <ChequePrintView
         template={activeTemplate}
         chequeData={chequeData}
